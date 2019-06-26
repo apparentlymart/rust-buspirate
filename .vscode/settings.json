@@ -1,0 +1,4 @@
+{
+"lldb.executable": "lldb-7",
+"debug.allowBreakpointsEverywhere": true
+}

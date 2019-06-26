@@ -1,0 +1,9 @@
+[package]
+name = "bpcli"
+version = "0.1.0"
+authors = ["Martin Atkins <mart@degeneration.co.uk>"]
+edition = "2018"
+
+[dependencies]
+serial-embedded-hal = "0.1.2"
+buspirate = { path = "../buspirate" }

@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "custom",
+      "name": "LLDB Debug",
+      "targetCreateCommands": [
+        "target create ${workspaceFolder}/target/debug/bpcli"
+      ],
+      "processCreateCommands": ["process launch"]
+    }
+  ]
+}
