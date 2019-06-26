@@ -38,21 +38,7 @@ where
         // Before we go any further, we'll read out anything that's in the
         // receive buffer. If the Bus Pirate is behaving as expected then
         // its initialization messages and "HiZ>" prompt will be there.
-        loop {
-            match self.rx.read() {
-                Ok(_) => (), // Ignore
-                Err(err) => match err {
-                    nb::Error::WouldBlock => break, // Stop if there's nothing else to read
-                    nb::Error::Other(err) => return Err(Error::rx(err)), // Propagate
-                },
-            }
-        }
-
-        // We send only 19 nulls here because binary_reset_handshake will send
-        // one more, for a total of 20.
-        for _ in 0..19 {
-            nb::block!(self.tx.write(0x00)).map_err(Error::tx)?;
-        }
+        eat_rx_buffer(&mut self.tx, &mut self.rx)?;
 
         binary_reset_handshake(self.tx, self.rx)
     }
@@ -168,15 +154,39 @@ fn binary_mode_handshake<MODE: Mode, TX: serial::Write<u8>, RX: serial::Read<u8>
     send: u8,
     expect: &'static [u8; 4],
 ) -> Result<Open<MODE, TX, RX>, Error<TX::Error, RX::Error>> {
-    nb::block!(tx.write(send)).map_err(Error::tx)?;
-    nb::block!(tx.flush()).map_err(Error::tx)?;
+    let mut ok = false;
+    'tries: for _ in 0..10 {
+        nb::block!(tx.flush()).map_err(Error::tx)?;
+        nb::block!(tx.write(send)).map_err(Error::tx)?;
 
-    for i in 0..4 {
-        let c = nb::block!(rx.read()).map_err(Error::rx)?;
-        if c != expect[i] {
-            return Err(Error::Protocol);
+        let mut correct = 0;
+        loop {
+            match rx.read() {
+                Ok(c) => {
+                    if c != expect[correct] {
+                        correct = 0;
+                    }
+                    if c == expect[correct] {
+                        correct += 1;
+                        if correct == expect.len() {
+                            ok = true;
+                            break 'tries;
+                        }
+                    }
+                }
+                Err(e) => match e {
+                    nb::Error::WouldBlock => continue 'tries,
+                    nb::Error::Other(e) => return Err(Error::rx(e)),
+                },
+            }
         }
     }
+
+    if !ok {
+        return Err(Error::Protocol);
+    }
+
+    eat_rx_buffer(&mut tx, &mut rx)?;
 
     Ok(Open {
         tx: tx,
@@ -189,20 +199,58 @@ fn binary_reset_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
     mut tx: TX,
     mut rx: RX,
 ) -> Result<Open<HiZ, TX, RX>, Error<TX::Error, RX::Error>> {
-    nb::block!(tx.write(0x00)).map_err(Error::tx)?;
+    let mut ok = false;
+    'tries: for _ in 0..20 {
+        nb::block!(tx.flush()).map_err(Error::tx)?;
+        nb::block!(tx.write(0x00)).map_err(Error::tx)?;
 
-    // Now we're expecting the Bus Pirate to return the string "BBIO1"
-    // to signal that it speaks the version 1 bitbang protocol.
-    for i in 0..5 {
-        let c = nb::block!(rx.read()).map_err(Error::rx)?;
-        if c != PROTO_VERSION_MSG[i] {
-            return Err(Error::Protocol);
+        let mut correct = 0;
+        loop {
+            match rx.read() {
+                Ok(c) => {
+                    if c != PROTO_VERSION_MSG[correct] {
+                        correct = 0;
+                    }
+                    if c == PROTO_VERSION_MSG[correct] {
+                        correct += 1;
+                        if correct == PROTO_VERSION_MSG.len() {
+                            ok = true;
+                            break 'tries;
+                        }
+                    }
+                }
+                Err(e) => match e {
+                    nb::Error::WouldBlock => continue 'tries,
+                    nb::Error::Other(e) => return Err(Error::rx(e)),
+                },
+            }
         }
     }
+
+    if !ok {
+        return Err(Error::Protocol);
+    }
+
+    eat_rx_buffer(&mut tx, &mut rx)?;
 
     Ok(Open {
         tx: tx,
         rx: rx,
         mode: PhantomData,
     })
+}
+
+fn eat_rx_buffer<TX: serial::Write<u8>, RX: serial::Read<u8>>(
+    tx: &mut TX,
+    rx: &mut RX,
+) -> Result<(), Error<TX::Error, RX::Error>> {
+    loop {
+        match rx.read() {
+            Ok(_) => (), // Ignore
+            Err(err) => match err {
+                nb::Error::WouldBlock => return Ok(()), // Stop if there's nothing else to read
+                nb::Error::Other(err) => return Err(Error::rx(err)), // Propagate
+            },
+        }
+    }
 }
