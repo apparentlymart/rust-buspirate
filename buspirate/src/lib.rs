@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use embedded_hal::serial;
 
 const PROTO_VERSION_MSG: [u8; 5] = ['B' as u8, 'B' as u8, 'I' as u8, 'O' as u8, '1' as u8];
+const PROTO_SPI_VERSION_MSG: [u8; 4] = ['S' as u8, 'P' as u8, 'I' as u8, '1' as u8];
 
 #[derive(Debug, Clone)]
 pub struct BusPirate<TX, RX> {
@@ -31,26 +32,29 @@ where
             nb::block!(self.tx.write(0x10)).map_err(Error::tx)?;
         }
         nb::block!(self.tx.write('#' as u8)).map_err(Error::tx)?;
-        for _ in 0..20 {
-            nb::block!(self.tx.write(0x00)).map_err(Error::tx)?;
-        }
+        nb::block!(self.tx.write(0x10)).map_err(Error::tx)?;
+        nb::block!(self.tx.flush()).map_err(Error::tx)?;
 
-        // Now we're expecting the Bus Pirate to return the string "BBIO1"
-        // to signal that it speaks the version 1 bitbang protocol.
-        for i in 0..5 {
-            let c = nb::block!(self.rx.read()).map_err(Error::rx)?;
-            if c != PROTO_VERSION_MSG[i] {
-                return Err(Error::Protocol);
+        // Before we go any further, we'll read out anything that's in the
+        // receive buffer. If the Bus Pirate is behaving as expected then
+        // its initialization messages and "HiZ>" prompt will be there.
+        loop {
+            match self.rx.read() {
+                Ok(_) => (), // Ignore
+                Err(err) => match err {
+                    nb::Error::WouldBlock => break, // Stop if there's nothing else to read
+                    nb::Error::Other(err) => return Err(Error::rx(err)), // Propagate
+                },
             }
         }
 
-        // If all of the above worked out then the Bus Pirate is now in
-        // binary HiZ mode.
-        Ok(Open {
-            tx: self.tx,
-            rx: self.rx,
-            mode: PhantomData,
-        })
+        // We send only 19 nulls here because binary_reset_handshake will send
+        // one more, for a total of 20.
+        for _ in 0..19 {
+            nb::block!(self.tx.write(0x00)).map_err(Error::tx)?;
+        }
+
+        binary_reset_handshake(self.tx, self.rx)
     }
 }
 
@@ -86,18 +90,24 @@ where
     }
 }
 
-impl<TX, RX> Open<HiZ, TX, RX>
+impl<TX, RX, TXErr, RXErr> Open<HiZ, TX, RX>
 where
-    TX: serial::Write<u8>,
-    RX: serial::Read<u8>,
+    TX: serial::Write<u8, Error = TXErr>,
+    RX: serial::Read<u8, Error = RXErr>,
 {
+    pub fn to_spi(self) -> Result<Open<SPI, TX, RX>, Error<TXErr, RXErr>> {
+        binary_mode_handshake::<SPI, TX, RX>(self.tx, self.rx, 00000001, &PROTO_SPI_VERSION_MSG)
+    }
 }
 
-impl<TX, RX> Open<SPI, TX, RX>
+impl<TX, RX, TXErr, RXErr> Open<SPI, TX, RX>
 where
-    TX: serial::Write<u8>,
-    RX: serial::Read<u8>,
+    TX: serial::Write<u8, Error = TXErr>,
+    RX: serial::Read<u8, Error = RXErr>,
 {
+    pub fn exit(self) -> Result<Open<HiZ, TX, RX>, Error<TXErr, RXErr>> {
+        binary_reset_handshake(self.tx, self.rx)
+    }
 }
 
 pub struct Closed<TX, RX> {
@@ -150,4 +160,49 @@ impl<TXErr, RXErr> Error<TXErr, RXErr> {
             },
         }
     }
+}
+
+fn binary_mode_handshake<MODE: Mode, TX: serial::Write<u8>, RX: serial::Read<u8>>(
+    mut tx: TX,
+    mut rx: RX,
+    send: u8,
+    expect: &'static [u8; 4],
+) -> Result<Open<MODE, TX, RX>, Error<TX::Error, RX::Error>> {
+    nb::block!(tx.write(send)).map_err(Error::tx)?;
+    nb::block!(tx.flush()).map_err(Error::tx)?;
+
+    for i in 0..4 {
+        let c = nb::block!(rx.read()).map_err(Error::rx)?;
+        if c != expect[i] {
+            return Err(Error::Protocol);
+        }
+    }
+
+    Ok(Open {
+        tx: tx,
+        rx: rx,
+        mode: PhantomData,
+    })
+}
+
+fn binary_reset_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
+    mut tx: TX,
+    mut rx: RX,
+) -> Result<Open<HiZ, TX, RX>, Error<TX::Error, RX::Error>> {
+    nb::block!(tx.write(0x00)).map_err(Error::tx)?;
+
+    // Now we're expecting the Bus Pirate to return the string "BBIO1"
+    // to signal that it speaks the version 1 bitbang protocol.
+    for i in 0..5 {
+        let c = nb::block!(rx.read()).map_err(Error::rx)?;
+        if c != PROTO_VERSION_MSG[i] {
+            return Err(Error::Protocol);
+        }
+    }
+
+    Ok(Open {
+        tx: tx,
+        rx: rx,
+        mode: PhantomData,
+    })
 }
