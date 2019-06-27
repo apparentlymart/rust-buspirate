@@ -1,0 +1,9 @@
+[package]
+name = "buspirate-hal"
+version = "0.1.0"
+authors = ["Martin Atkins <mart@degeneration.co.uk>"]
+edition = "2018"
+
+[dependencies]
+buspirate = { path = "../buspirate" }
+embedded-hal = "^0.2.3"

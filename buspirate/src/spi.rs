@@ -69,3 +69,31 @@ impl Config {
         cmd
     }
 }
+
+pub trait TransferBuffered {
+    type Error;
+
+    fn transfer<'w>(
+        &mut self,
+        v: &'w mut [u8],
+        want: usize,
+        cs: bool,
+    ) -> Result<&'w [u8], Self::Error>;
+}
+
+impl<TX, RX, TXErr, RXErr> TransferBuffered for crate::Open<crate::SPI, TX, RX>
+where
+    TX: embedded_hal::serial::Write<u8, Error = TXErr>,
+    RX: embedded_hal::serial::Read<u8, Error = RXErr>,
+{
+    type Error = crate::Error<TXErr, RXErr>;
+
+    fn transfer<'w>(
+        &mut self,
+        v: &'w mut [u8],
+        want: usize,
+        cs: bool,
+    ) -> Result<&'w [u8], Self::Error> {
+        self.transfer_bytes_buffered(v, want, cs)
+    }
+}

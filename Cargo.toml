@@ -1,2 +1,2 @@
 [workspace]
-members = ["buspirate", "bpcli"]
+members = ["buspirate", "buspirate-hal", "bpcli"]
