@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod peripherals;
 pub mod spi;
 
 use core::marker::PhantomData;
@@ -73,7 +74,7 @@ where
     pub fn close(mut self) -> Result<BusPirate<TX, RX>, Error<TXErr, RXErr>> {
         // We'll reset the Bus Pirate back into user terminal mode before
         // we release the serial port objects.
-        self.send_close();
+        self.send_close()?;
 
         Ok(BusPirate {
             tx: self.tx,
@@ -116,8 +117,35 @@ where
         binary_reset_handshake(self.tx, self.rx)
     }
 
+    pub fn set_speed(&mut self, speed: spi::Speed) -> Result<(), Error<TXErr, RXErr>> {
+        use spi::Speed::*;
+        let bits = match speed {
+            Speed30KHz => 0b000,
+            Speed125KHz => 0b001,
+            Speed250KHz => 0b010,
+            Speed1MHz => 0b011,
+            Speed2MHz => 0b100,
+            Speed2_6MHz => 0b101,
+            Speed4MHz => 0b110,
+            Speed8MHz => 0b111,
+        } as u8;
+        self.simple_cmd_blocking(0b01000000 | bits)
+    }
+
+    pub fn set_config(&mut self, config: spi::Config) -> Result<(), Error<TXErr, RXErr>> {
+        self.simple_cmd_blocking(config.command_byte())
+    }
+
+    pub fn configure_peripherals(
+        &mut self,
+        config: peripherals::Config,
+    ) -> Result<(), Error<TXErr, RXErr>> {
+        self.simple_cmd_blocking(config.command_byte())
+    }
+
     pub fn chip_select(&mut self, active: bool) -> Result<(), Error<TXErr, RXErr>> {
-        self.simple_cmd_blocking(if active { 0b00000011 } else { 0b00000010 })
+        // Chip select is active low, so active = true means CS is low.
+        self.simple_cmd_blocking(if active { 0b00000010 } else { 0b00000011 })
     }
 
     pub fn transfer_byte(&mut self, v: u8) -> Result<u8, Error<TXErr, RXErr>> {
@@ -154,6 +182,41 @@ where
 
         Ok(v)
     }
+
+    pub fn transfer_bytes_buffered<'w>(
+        &mut self,
+        v: &'w mut [u8],
+        want: usize,
+        cs: bool,
+    ) -> Result<&'w [u8], Error<TXErr, RXErr>> {
+        if v.len() > 4096 {
+            return Err(Error::Request); // Too many bytes to send
+        }
+        if want > v.len() {
+            return Err(Error::Request); // Can't read more than we're writing
+        }
+
+        let len = v.len() as u16;
+        nb::block!(self.tx.write(if cs { 0b00000100 } else { 0b00000101 })).map_err(Error::tx)?;
+        nb::block!(self.tx.write((len >> 8) as u8)).map_err(Error::tx)?; // MSB of length to write
+        nb::block!(self.tx.write(len as u8)).map_err(Error::tx)?; // LSB of length to write
+        nb::block!(self.tx.write((want >> 8) as u8)).map_err(Error::tx)?; // MSB of length to read
+        nb::block!(self.tx.write(want as u8)).map_err(Error::tx)?; // LSB of length to read
+        for i in 0..v.len() {
+            nb::block!(self.tx.write(v[i])).map_err(Error::tx)?;
+        }
+
+        match nb::block!(self.rx.read()).map_err(Error::rx)? {
+            0x01 => (),
+            _ => return Err(Error::<TXErr, RXErr>::Protocol),
+        }
+
+        for i in 0..want {
+            v[i] = nb::block!(self.rx.read()).map_err(Error::rx)?;
+        }
+
+        Ok(&v[0..want])
+    }
 }
 
 #[derive(Debug)]
@@ -171,26 +234,6 @@ impl<TXErr, RXErr> Error<TXErr, RXErr> {
 
     fn rx(got: RXErr) -> Self {
         Error::Read(got)
-    }
-
-    fn tx_result<R>(got: nb::Result<R, TXErr>) -> nb::Result<R, Self> {
-        match got {
-            Ok(v) => Ok(v),
-            Err(err) => match err {
-                nb::Error::WouldBlock => return Err(nb::Error::WouldBlock),
-                nb::Error::Other(err) => return Err(nb::Error::Other(Error::Write(err))),
-            },
-        }
-    }
-
-    fn rx_result<R>(got: nb::Result<R, RXErr>) -> nb::Result<R, Self> {
-        match got {
-            Ok(v) => Ok(v),
-            Err(err) => match err {
-                nb::Error::WouldBlock => return Err(nb::Error::WouldBlock),
-                nb::Error::Other(err) => return Err(nb::Error::Other(Error::Read(err))),
-            },
-        }
     }
 }
 
@@ -287,7 +330,7 @@ fn binary_reset_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
 }
 
 fn eat_rx_buffer<TX: serial::Write<u8>, RX: serial::Read<u8>>(
-    tx: &mut TX,
+    _tx: &mut TX,
     rx: &mut RX,
 ) -> Result<(), Error<TX::Error, RX::Error>> {
     loop {

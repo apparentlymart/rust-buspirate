@@ -1,3 +1,4 @@
+use buspirate::spi;
 use buspirate::BusPirate;
 use serial_embedded_hal::{PortSettings, Serial};
 
@@ -24,11 +25,17 @@ fn main() {
     let mut bp_spi = bp.to_spi().unwrap();
     println!("Switched to SPI mode");
 
+    bp_spi.set_speed(spi::Speed::Speed30KHz).unwrap();
+    println!("Set SPI Speed");
+
+    bp_spi.set_config(spi::DEFAULT_CONFIG).unwrap();
+    println!("Set SPI Config");
+
     bp_spi.chip_select(true).unwrap();
     println!("Activated chip select");
     //bp_spi.transfer_byte(0b10101010).unwrap();
     bp_spi
-        .transfer_bytes(&mut [0b10101010, 0b01010101])
+        .transfer_bytes_buffered(&mut [0b10101010, 0b01010101], 0, false)
         .unwrap();
     println!("Transferred bytes");
     bp_spi.chip_select(false).unwrap();
