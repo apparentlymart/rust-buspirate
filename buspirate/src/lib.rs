@@ -9,7 +9,7 @@ const PROTO_VERSION_MSG: [u8; 5] = ['B' as u8, 'B' as u8, 'I' as u8, 'O' as u8, 
 const PROTO_SPI_VERSION_MSG: [u8; 4] = ['S' as u8, 'P' as u8, 'I' as u8, '1' as u8];
 
 #[derive(Debug, Clone)]
-pub struct BusPirate<TX, RX> {
+pub struct BusPirate<TX: serial::Write<u8>, RX: serial::Read<u8>> {
     tx: TX,
     rx: RX,
 }
@@ -58,7 +58,7 @@ impl Mode for HiZ {}
 impl Mode for SPI {}
 
 #[derive(Debug, Clone)]
-pub struct Open<MODE: Mode, TX, RX> {
+pub struct Open<MODE: Mode, TX: serial::Write<u8>, RX: serial::Read<u8>> {
     tx: TX,
     rx: RX,
     mode: PhantomData<MODE>,
@@ -73,12 +73,17 @@ where
     pub fn close(mut self) -> Result<BusPirate<TX, RX>, Error<TXErr, RXErr>> {
         // We'll reset the Bus Pirate back into user terminal mode before
         // we release the serial port objects.
-        nb::block!(self.tx.write(0b00001111)).map_err(Error::tx)?;
+        self.send_close();
 
         Ok(BusPirate {
             tx: self.tx,
             rx: self.rx,
         })
+    }
+
+    fn send_close(&mut self) -> Result<(), Error<TXErr, RXErr>> {
+        nb::block!(self.tx.write(0b00001111)).map_err(Error::tx)?;
+        Ok(())
     }
 
     fn simple_cmd_blocking(&mut self, cmd: u8) -> Result<(), Error<TXErr, RXErr>> {
@@ -111,8 +116,8 @@ where
         binary_reset_handshake(self.tx, self.rx)
     }
 
-    pub fn chip_select(&mut self, high: bool) -> Result<(), Error<TXErr, RXErr>> {
-        self.simple_cmd_blocking(if high { 0b00000011 } else { 0b00000010 })
+    pub fn chip_select(&mut self, active: bool) -> Result<(), Error<TXErr, RXErr>> {
+        self.simple_cmd_blocking(if active { 0b00000011 } else { 0b00000010 })
     }
 
     pub fn transfer_byte(&mut self, v: u8) -> Result<u8, Error<TXErr, RXErr>> {
