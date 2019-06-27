@@ -16,7 +16,7 @@ where
         crate::close_handshake(self.ch)
     }
 
-    pub fn exit(self) -> Result<crate::HiZ<TX, RX>, Error<TXErr, RXErr>> {
+    pub fn to_hiz(self) -> Result<crate::hiz::HiZ<TX, RX>, Error<TXErr, RXErr>> {
         crate::binary_reset_handshake(self.ch)
     }
 

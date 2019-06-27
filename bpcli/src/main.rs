@@ -41,6 +41,6 @@ fn main() {
     bp_spi.chip_select(false).unwrap();
     println!("Deactivated chip select");
 
-    bp_spi.exit().unwrap().close().unwrap();
+    bp_spi.to_hiz().unwrap().close().unwrap();
     println!("Closed (and thus reset) Bus Pirate");
 }

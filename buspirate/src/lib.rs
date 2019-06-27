@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod hiz;
 mod low;
 pub mod peripherals;
 pub mod spi;
@@ -25,7 +26,7 @@ where
         }
     }
 
-    pub fn init(mut self) -> Result<HiZ<TX, RX>, Error<TXErr, RXErr>> {
+    pub fn init(mut self) -> Result<hiz::HiZ<TX, RX>, Error<TXErr, RXErr>> {
         // The Bus Pirate could be in any mode when we find it, so
         // we follow the advice given in the protocol documentation:
         // - Send newline 10 times to escape from any menu/prompts in progress
@@ -49,25 +50,6 @@ where
 
     pub fn release(self) -> (TX, RX) {
         (self.ch.tx, self.ch.rx)
-    }
-}
-
-pub struct HiZ<TX: serial::Write<u8>, RX: serial::Read<u8>> {
-    ch: low::Channel<TX, RX>,
-}
-
-impl<TX, RX, TXErr, RXErr> HiZ<TX, RX>
-where
-    TX: serial::Write<u8, Error = TXErr>,
-    RX: serial::Read<u8, Error = RXErr>,
-{
-    pub fn close(self) -> Result<BusPirate<TX, RX>, Error<TXErr, RXErr>> {
-        close_handshake(self.ch)
-    }
-
-    pub fn to_spi(self) -> Result<spi::SPI<TX, RX>, Error<TXErr, RXErr>> {
-        let ch = binary_mode_handshake(self.ch, 0b00000001, &PROTO_SPI_VERSION_MSG)?;
-        Ok(spi::SPI { ch: ch })
     }
 }
 
@@ -133,7 +115,7 @@ fn binary_mode_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
 
 fn binary_reset_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
     mut ch: low::Channel<TX, RX>,
-) -> Result<HiZ<TX, RX>, Error<TX::Error, RX::Error>> {
+) -> Result<hiz::HiZ<TX, RX>, Error<TX::Error, RX::Error>> {
     let mut ok = false;
     'tries: for _ in 0..20 {
         ch.flush()?;
@@ -168,7 +150,7 @@ fn binary_reset_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
 
     ch.eat_rx_buffer()?;
 
-    Ok(HiZ { ch: ch })
+    Ok(hiz::HiZ { ch: ch })
 }
 
 fn close_handshake<TX: serial::Write<u8>, RX: serial::Read<u8>>(
