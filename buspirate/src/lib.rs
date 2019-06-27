@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod spi;
+
 use core::marker::PhantomData;
 use embedded_hal::serial;
 
@@ -42,6 +44,10 @@ where
 
         binary_reset_handshake(self.tx, self.rx)
     }
+
+    pub fn release(self) -> (TX, RX) {
+        (self.tx, self.rx)
+    }
 }
 
 pub struct HiZ; // HiZ Mode
@@ -64,15 +70,25 @@ where
     TX: serial::Write<u8, Error = TXErr>,
     RX: serial::Read<u8, Error = RXErr>,
 {
-    pub fn close(mut self) -> Result<Closed<TX, RX>, Error<TXErr, RXErr>> {
+    pub fn close(mut self) -> Result<BusPirate<TX, RX>, Error<TXErr, RXErr>> {
         // We'll reset the Bus Pirate back into user terminal mode before
         // we release the serial port objects.
         nb::block!(self.tx.write(0b00001111)).map_err(Error::tx)?;
 
-        Ok(Closed {
+        Ok(BusPirate {
             tx: self.tx,
             rx: self.rx,
         })
+    }
+
+    fn simple_cmd_blocking(&mut self, cmd: u8) -> Result<(), Error<TXErr, RXErr>> {
+        nb::block!(self.tx.write(cmd)).map_err(Error::tx)?;
+        nb::block!(self.tx.flush()).map_err(Error::tx)?;
+
+        match nb::block!(self.rx.read()).map_err(Error::rx)? {
+            0x01 => Ok(()),
+            _ => Err(Error::Protocol),
+        }
     }
 }
 
@@ -82,7 +98,7 @@ where
     RX: serial::Read<u8, Error = RXErr>,
 {
     pub fn to_spi(self) -> Result<Open<SPI, TX, RX>, Error<TXErr, RXErr>> {
-        binary_mode_handshake::<SPI, TX, RX>(self.tx, self.rx, 00000001, &PROTO_SPI_VERSION_MSG)
+        binary_mode_handshake::<SPI, TX, RX>(self.tx, self.rx, 0b00000001, &PROTO_SPI_VERSION_MSG)
     }
 }
 
@@ -94,26 +110,51 @@ where
     pub fn exit(self) -> Result<Open<HiZ, TX, RX>, Error<TXErr, RXErr>> {
         binary_reset_handshake(self.tx, self.rx)
     }
-}
 
-pub struct Closed<TX, RX> {
-    tx: TX,
-    rx: RX,
-}
+    pub fn chip_select(&mut self, high: bool) -> Result<(), Error<TXErr, RXErr>> {
+        self.simple_cmd_blocking(if high { 0b00000011 } else { 0b00000010 })
+    }
 
-impl<TX, RX> Closed<TX, RX>
-where
-    TX: serial::Write<u8>,
-    RX: serial::Read<u8>,
-{
-    pub fn release(self) -> (TX, RX) {
-        (self.tx, self.rx)
+    pub fn transfer_byte(&mut self, v: u8) -> Result<u8, Error<TXErr, RXErr>> {
+        nb::block!(self.tx.write(0b00010000)).map_err(Error::tx)?;
+        nb::block!(self.tx.write(v)).map_err(Error::tx)?;
+        nb::block!(self.tx.flush()).map_err(Error::tx)?;
+        match nb::block!(self.rx.read()).map_err(Error::rx)? {
+            0x01 => nb::block!(self.rx.read()).map_err(Error::rx),
+            _ => Err(Error::<TXErr, RXErr>::Protocol),
+        }
+    }
+
+    pub fn transfer_bytes<'w>(&mut self, v: &'w mut [u8]) -> Result<&'w [u8], Error<TXErr, RXErr>> {
+        if v.len() > 16 {
+            return Err(Error::Request); // Too many bytes to send
+        }
+
+        let len = v.len() as u8;
+        let cmd = (0b00010000 as u8) | (len - 1);
+        nb::block!(self.tx.write(cmd)).map_err(Error::tx)?;
+        for i in 0..v.len() {
+            nb::block!(self.tx.write(v[i])).map_err(Error::tx)?;
+        }
+        nb::block!(self.tx.flush()).map_err(Error::tx)?;
+
+        match nb::block!(self.rx.read()).map_err(Error::rx)? {
+            0x01 => (),
+            _ => return Err(Error::<TXErr, RXErr>::Protocol),
+        }
+
+        for i in 0..v.len() {
+            v[i] = nb::block!(self.rx.read()).map_err(Error::rx)?;
+        }
+
+        Ok(v)
     }
 }
 
 #[derive(Debug)]
 pub enum Error<TXErr, RXErr> {
     Protocol,
+    Request,
     Write(TXErr),
     Read(RXErr),
 }

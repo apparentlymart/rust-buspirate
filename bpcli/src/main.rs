@@ -16,12 +16,24 @@ fn main() {
     )
     .unwrap();
     let (tx, rx) = port.split();
+    println!("Opened tty");
 
     let bp = BusPirate::new(tx, rx).init().unwrap();
+    println!("Alloced and inited BusPirate");
 
-    let bp_spi = bp.to_spi().unwrap();
+    let mut bp_spi = bp.to_spi().unwrap();
+    println!("Switched to SPI mode");
+
+    bp_spi.chip_select(true).unwrap();
+    println!("Activated chip select");
+    //bp_spi.transfer_byte(0b10101010).unwrap();
+    bp_spi
+        .transfer_bytes(&mut [0b10101010, 0b01010101])
+        .unwrap();
+    println!("Transferred bytes");
+    bp_spi.chip_select(false).unwrap();
+    println!("Deactivated chip select");
 
     bp_spi.exit().unwrap().close().unwrap();
-
-    println!("Hello, world!");
+    println!("Closed (and thus reset) Bus Pirate");
 }
