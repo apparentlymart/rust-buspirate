@@ -1,8 +1,12 @@
+//! Module `peripherals` represents the general (mode-agnostic) peripherals on
+//! a Bus Pirate module.
+
+/// `Config` represents the configuration of mode-agnostic peripherals.
 pub struct Config {
-    power_supply: bool,
-    pull_ups: bool,
-    aux: bool,
-    cs: bool,
+    pub power_supply: bool,
+    pub pull_ups: bool,
+    pub aux: bool,
+    pub cs: bool,
 }
 
 impl Config {

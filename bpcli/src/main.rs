@@ -19,7 +19,7 @@ fn main() {
     let (tx, rx) = port.split();
     println!("Opened tty");
 
-    let bp = BusPirate::new(tx, rx).init().unwrap();
+    let bp = BusPirate::new(tx, rx).to_bitbang().unwrap();
     println!("Alloced and inited BusPirate");
 
     let mut bp_spi = bp.to_spi().unwrap();
