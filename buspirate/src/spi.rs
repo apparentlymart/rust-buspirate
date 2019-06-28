@@ -87,27 +87,29 @@ where
         Ok(v)
     }
 
-    pub fn transfer_bytes_buffered<'w>(
+    pub fn write_then_read<'w>(
         &mut self,
-        v: &'w mut [u8],
-        want: usize,
+        write_from: &[u8],
+        read_into: &mut [u8],
         cs: bool,
-    ) -> Result<&'w [u8], Error<TXErr, RXErr>> {
-        if v.len() > 4096 {
+    ) -> Result<(), Error<TXErr, RXErr>> {
+        if write_from.len() > 4096 {
             return Err(Error::Request); // Too many bytes to send
         }
-        if want > v.len() {
-            return Err(Error::Request); // Can't read more than we're writing
+        if read_into.len() > 4096 {
+            return Err(Error::Request); // Too many bytes to read
         }
 
-        let len = v.len() as u16;
+        let wr_len = write_from.len() as u16;
+        let rd_len = read_into.len() as u16;
         self.ch.write(if cs { 0b00000100 } else { 0b00000101 })?;
-        self.ch.write((len >> 8) as u8)?; // MSB of length to write
-        self.ch.write(len as u8)?; // LSB of length to write
-        self.ch.write((want >> 8) as u8)?; // MSB of length to read
-        self.ch.write(want as u8)?; // LSB of length to read
-        for i in 0..v.len() {
-            self.ch.write(v[i])?;
+        self.ch.write((wr_len >> 8) as u8)?; // MSB of length to write
+        self.ch.write(wr_len as u8)?; // LSB of length to write
+        self.ch.write((rd_len >> 8) as u8)?; // MSB of length to read
+        self.ch.write(rd_len as u8)?; // LSB of length to read
+
+        for c in write_from {
+            self.ch.write(*c)?;
         }
 
         match self.ch.read()? {
@@ -115,11 +117,11 @@ where
             _ => return Err(Error::<TXErr, RXErr>::Protocol),
         }
 
-        for i in 0..want {
-            v[i] = self.ch.read()?;
+        for i in 0..read_into.len() {
+            read_into[i] = self.ch.read()?;
         }
 
-        Ok(&v[0..want])
+        Ok(())
     }
 }
 
@@ -195,30 +197,42 @@ impl Config {
     }
 }
 
-pub trait TransferBuffered {
+pub trait Comms {
     type Error;
 
-    fn transfer<'w>(
+    fn transfer<'w>(&mut self, v: &'w mut [u8]) -> Result<&'w [u8], Self::Error>;
+    fn transaction<'w>(
         &mut self,
-        v: &'w mut [u8],
-        want: usize,
+        write_from: &'w [u8],
+        read_into: &'w mut [u8],
         cs: bool,
-    ) -> Result<&'w [u8], Self::Error>;
+    ) -> Result<(), Self::Error>;
 }
 
-impl<TX, RX, TXErr, RXErr> TransferBuffered for SPI<TX, RX>
+impl<TX, RX, TXErr, RXErr> Comms for SPI<TX, RX>
 where
     TX: embedded_hal::serial::Write<u8, Error = TXErr>,
     RX: embedded_hal::serial::Read<u8, Error = RXErr>,
 {
     type Error = crate::Error<TXErr, RXErr>;
 
-    fn transfer<'w>(
+    fn transfer<'w>(&mut self, v: &'w mut [u8]) -> Result<&'w [u8], Self::Error> {
+        let mut remain = &mut v[..];
+        while remain.len() > 0 {
+            let len = if remain.len() > 16 { 16 } else { remain.len() };
+            let (next, after) = remain.split_at_mut(len);
+            self.transfer_bytes(next)?; // This overwrites elements of v in-place.
+            remain = after;
+        }
+        Ok(v)
+    }
+
+    fn transaction<'w>(
         &mut self,
-        v: &'w mut [u8],
-        want: usize,
+        write_from: &'w [u8],
+        read_into: &'w mut [u8],
         cs: bool,
-    ) -> Result<&'w [u8], Self::Error> {
-        self.transfer_bytes_buffered(v, want, cs)
+    ) -> Result<(), Self::Error> {
+        self.write_then_read(write_from, read_into, cs)
     }
 }
